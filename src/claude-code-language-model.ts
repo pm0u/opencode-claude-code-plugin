@@ -2,9 +2,7 @@ import type {
   LanguageModelV2,
   LanguageModelV2CallWarning,
   LanguageModelV2Content,
-  LanguageModelV2FinishReason,
   LanguageModelV2StreamPart,
-  LanguageModelV2Usage,
 } from "@ai-sdk/provider"
 import { generateId } from "@ai-sdk/provider-utils"
 import type { ClaudeCodeConfig, ClaudeStreamMessage } from "./types.js"
@@ -24,28 +22,46 @@ import { log } from "./logger.js"
 
 type ClaudeCodeEffort = "low" | "medium" | "high" | "max"
 
-function buildUsage(
-  usage?: ClaudeStreamMessage["usage"],
-): LanguageModelV2Usage {
-  const hasInputTokens =
+/**
+ * Build v3-compatible usage object.
+ * OpenCode uses AI SDK v3 which expects nested inputTokens/outputTokens.
+ */
+function buildUsage(usage?: ClaudeStreamMessage["usage"]): any {
+  const inputTotal =
     typeof usage?.input_tokens === "number" ||
     typeof usage?.cache_read_input_tokens === "number" ||
     typeof usage?.cache_creation_input_tokens === "number"
-  const inputTokens = hasInputTokens
-    ? (usage?.input_tokens ?? 0) +
-      (usage?.cache_read_input_tokens ?? 0) +
-      (usage?.cache_creation_input_tokens ?? 0)
-    : undefined
-  const outputTokens = usage?.output_tokens
+      ? (usage?.input_tokens ?? 0) +
+        (usage?.cache_read_input_tokens ?? 0) +
+        (usage?.cache_creation_input_tokens ?? 0)
+      : undefined
 
   return {
-    inputTokens,
-    outputTokens,
-    totalTokens:
-      typeof inputTokens === "number" && typeof outputTokens === "number"
-        ? inputTokens + outputTokens
-        : undefined,
-    cachedInputTokens: usage?.cache_read_input_tokens,
+    inputTokens: {
+      total: inputTotal,
+      noCache: usage?.input_tokens,
+      cacheRead: usage?.cache_read_input_tokens,
+      cacheWrite: usage?.cache_creation_input_tokens,
+    },
+    outputTokens: {
+      total: usage?.output_tokens,
+      text: undefined,
+      reasoning: undefined,
+    },
+  }
+}
+
+/**
+ * Build v3-compatible finishReason object.
+ */
+function buildFinishReason(reason: string): any {
+  return { unified: reason, raw: undefined }
+}
+
+function buildZeroUsage(): any {
+  return {
+    inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 0, text: 0, reasoning: 0 },
   }
 }
 
@@ -203,12 +219,8 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       const text = this.synthesizeTitle(options.prompt)
       return {
         content: [{ type: "text", text }] as any,
-        finishReason: "stop",
-        usage: {
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-        },
+        finishReason: buildFinishReason("stop"),
+        usage: buildZeroUsage(),
         request: { body: { text: "" } },
         response: {
           id: generateId(),
@@ -239,6 +251,22 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
     const includeHistoryContext = !hasExistingSession && hasPriorConversation
 
     const userMsg = getClaudeUserMessage(options.prompt, includeHistoryContext)
+
+    if (!userMsg) {
+      log.info("doGenerate: no user content, returning empty result")
+      return {
+        content: [] as any,
+        finishReason: buildFinishReason("stop"),
+        usage: buildZeroUsage(),
+        request: { body: { text: "" } },
+        response: {
+          id: generateId(),
+          timestamp: new Date(),
+          modelId: this.modelId,
+        },
+        warnings,
+      }
+    }
 
     // doGenerate always spawns a fresh process, never reuse session ID
     const cliArgs = buildCliArgs({
@@ -505,9 +533,9 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
 
     return {
       content,
-      finishReason: (result.toolCalls.length > 0
-        ? "tool-calls"
-        : "stop") as LanguageModelV2FinishReason,
+      finishReason: buildFinishReason(
+        result.toolCalls.length > 0 ? "tool-calls" : "stop",
+      ),
       usage,
       request: { body: { text: userMsg } },
       response: {
@@ -552,19 +580,15 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
           controller.enqueue({ type: "text-end", id: textId })
           controller.enqueue({
             type: "finish",
-            finishReason: "stop",
-            usage: {
-              inputTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-            },
+            finishReason: buildFinishReason("stop"),
+            usage: buildZeroUsage(),
             providerMetadata: {
               "claude-code": {
                 synthetic: true,
                 path: "no-tools",
               },
             },
-          })
+          } as any)
           controller.close()
         },
       })
@@ -591,6 +615,22 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       !hasExistingSession && !hasActiveProcess && hasPriorConversation
 
     const userMsg = getClaudeUserMessage(options.prompt, includeHistoryContext)
+
+    if (!userMsg) {
+      log.info("doStream: no user content, returning finished stream")
+      const emptyStream = new ReadableStream<LanguageModelV2StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings })
+          controller.enqueue({
+            type: "finish",
+            finishReason: buildFinishReason("stop"),
+            usage: buildZeroUsage(),
+          } as any)
+          controller.close()
+        },
+      })
+      return { stream: emptyStream, request: { body: { text: "" } } }
+    }
 
     log.info("doStream starting", {
       cwd,
@@ -1113,13 +1153,14 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
 
               controller.enqueue({
                 type: "finish",
-                finishReason:
+                finishReason: buildFinishReason(
                   realToolCallCount > 0 ? "tool-calls" : "stop",
+                ),
                 usage: buildUsage(msg.usage),
                 providerMetadata: {
                   "claude-code": resultMeta,
                 },
-              })
+              } as any)
 
               controllerClosed = true
               lineEmitter.off("line", lineHandler)
@@ -1148,12 +1189,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
           }
           controller.enqueue({
             type: "finish",
-            finishReason: "stop",
+            finishReason: buildFinishReason("stop"),
             usage: buildUsage(resultMeta.usage),
             providerMetadata: {
               "claude-code": resultMeta,
             },
-          })
+          } as any)
           try {
             controller.close()
           } catch {}
