@@ -214,6 +214,10 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       usage?: ClaudeStreamMessage["usage"]
     } = {}
     const toolCalls: Array<{ id: string; name: string; args: unknown }> = []
+    const toolCallMap = new Map<
+      number,
+      { id: string; name: string; inputJson: string }
+    >()
 
     const result = await new Promise<
       typeof resultMeta & {
@@ -276,16 +280,20 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
             }
           }
 
-          if (msg.type === "content_block_start" && msg.content_block) {
+          if (
+            msg.type === "content_block_start" &&
+            msg.content_block &&
+            msg.index !== undefined
+          ) {
             if (
               msg.content_block.type === "tool_use" &&
               msg.content_block.id &&
               msg.content_block.name
             ) {
-              toolCalls.push({
+              toolCallMap.set(msg.index, {
                 id: msg.content_block.id,
                 name: msg.content_block.name,
-                args: {},
+                inputJson: "",
               })
             }
           }
@@ -302,13 +310,40 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
               msg.delta.partial_json &&
               msg.index !== undefined
             ) {
-              const tc = toolCalls[msg.index]
+              const tc = toolCallMap.get(msg.index)
               if (tc) {
-                try {
-                  tc.args = JSON.parse(msg.delta.partial_json)
-                } catch {
-                  // Partial JSON, accumulate
-                }
+                tc.inputJson += msg.delta.partial_json
+              }
+            }
+          }
+
+          if (
+            msg.type === "content_block_stop" &&
+            msg.index !== undefined
+          ) {
+            const tc = toolCallMap.get(msg.index)
+            if (tc) {
+              let parsedInput: any = {}
+              try {
+                parsedInput = JSON.parse(tc.inputJson || "{}")
+              } catch {}
+
+              if (
+                tc.name === "AskUserQuestion" ||
+                tc.name === "ask_user_question"
+              ) {
+                const question =
+                  (parsedInput?.question as string) || "Question?"
+                responseText += `\n\n_Asking: ${question}_\n\n`
+              } else if (tc.name === "ExitPlanMode") {
+                const plan = (parsedInput?.plan as string) || ""
+                responseText += `\n\n${plan}\n\n---\n**Do you want to proceed with this plan?** (yes/no)\n`
+              } else {
+                toolCalls.push({
+                  id: tc.id,
+                  name: tc.name,
+                  args: parsedInput,
+                })
               }
             }
           }
@@ -355,6 +390,13 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
 
       proc.stdin?.write(userMsg + "\n")
     })
+
+    // Clean up the process since doGenerate doesn't reuse it
+    try {
+      proc.stdin?.end()
+      proc.kill()
+    } catch {}
+
 
     const content: LanguageModelV2Content[] = []
 
@@ -542,6 +584,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
           string,
           { id: string; name: string; input: unknown }
         >()
+        let realToolCallCount = 0
 
         let resultMeta: {
           sessionId?: string
@@ -602,17 +645,24 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
               }
 
               if (block.type === "tool_use" && block.id && block.name) {
-                toolCallMap.set(idx, {
-                  id: block.id,
-                  name: block.name,
-                  inputJson: "",
-                })
-
                 if (
-                  block.name !== "AskUserQuestion" &&
-                  block.name !== "ask_user_question" &&
-                  block.name !== "ExitPlanMode"
+                  block.name === "AskUserQuestion" ||
+                  block.name === "ask_user_question" ||
+                  block.name === "ExitPlanMode"
                 ) {
+                  // Track pseudo-tools separately — they become text, not tool calls
+                  toolCallMap.set(idx, {
+                    id: block.id,
+                    name: block.name,
+                    inputJson: "",
+                  })
+                } else {
+                  toolCallMap.set(idx, {
+                    id: block.id,
+                    name: block.name,
+                    inputJson: "",
+                  })
+
                   const { name: mappedName, skip } = mapTool(block.name)
                   if (!skip) {
                     controller.enqueue({
@@ -669,11 +719,18 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                 const tc = toolCallMap.get(idx)
                 if (tc) {
                   tc.inputJson += delta.partial_json
-                  controller.enqueue({
-                    type: "tool-input-delta",
-                    id: tc.id,
-                    delta: delta.partial_json,
-                  } as any)
+                  // Only emit deltas for real tools, not pseudo-tools (AskUserQuestion, ExitPlanMode)
+                  if (
+                    tc.name !== "AskUserQuestion" &&
+                    tc.name !== "ask_user_question" &&
+                    tc.name !== "ExitPlanMode"
+                  ) {
+                    controller.enqueue({
+                      type: "tool-input-delta",
+                      id: tc.id,
+                      delta: delta.partial_json,
+                    } as any)
+                  }
                 }
               }
             }
@@ -773,6 +830,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                       input: JSON.stringify(mappedInput),
                       providerExecuted: executed,
                     } as any)
+                    realToolCallCount++
                   }
                   log.info("tool call complete", {
                     name: tc.name,
@@ -898,6 +956,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                         input: JSON.stringify(mappedInput),
                         providerExecuted: executed,
                       } as any)
+                      realToolCallCount++
                     }
                     log.info("tool_use from assistant message", {
                       name: block.name,
@@ -996,7 +1055,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
               controller.enqueue({
                 type: "finish",
                 finishReason:
-                  toolCallMap.size > 0 ? "tool-calls" : "stop",
+                  realToolCallCount > 0 ? "tool-calls" : "stop",
                 usage: {
                   inputTokens: msg.usage?.input_tokens,
                   outputTokens: msg.usage?.output_tokens,

@@ -105,21 +105,13 @@ export function mapTool(
   if (name === "WebSearch" || name === "web_search") {
     const mappedInput = input?.query ? { query: input.query } : input
     log.debug("mapping WebSearch", { originalInput: input, mappedInput })
-    return { name: "websearch_web_search_exa", input: mappedInput, executed: false }
+    return { name: "websearch", input: mappedInput, executed: false }
   }
 
-  // TaskOutput -> bash echo
+  // TaskOutput — Claude CLI internal, already executed
   if (name === "TaskOutput") {
-    if (!input) return { name: "bash", executed: false }
-    const output = input?.content || input?.output || JSON.stringify(input)
-    return {
-      name: "bash",
-      input: {
-        command: `echo "TASK OUTPUT: ${String(output).replace(/"/g, '\\"')}"`,
-        description: "Displaying task output",
-      },
-      executed: false,
-    }
+    log.debug("skipping TaskOutput", { name })
+    return { name, input, executed: true, skip: true }
   }
 
   // MCP tools: mcp__<server>__<tool> -> <server>_<tool>
