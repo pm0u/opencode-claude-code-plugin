@@ -22,6 +22,66 @@ import {
 } from "./session-manager.js"
 import { log } from "./logger.js"
 
+type ClaudeCodeEffort = "low" | "medium" | "high" | "max"
+
+function buildUsage(
+  usage?: ClaudeStreamMessage["usage"],
+): LanguageModelV2Usage {
+  const hasInputTokens =
+    typeof usage?.input_tokens === "number" ||
+    typeof usage?.cache_read_input_tokens === "number" ||
+    typeof usage?.cache_creation_input_tokens === "number"
+  const inputTokens = hasInputTokens
+    ? (usage?.input_tokens ?? 0) +
+      (usage?.cache_read_input_tokens ?? 0) +
+      (usage?.cache_creation_input_tokens ?? 0)
+    : undefined
+  const outputTokens = usage?.output_tokens
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens:
+      typeof inputTokens === "number" && typeof outputTokens === "number"
+        ? inputTokens + outputTokens
+        : undefined,
+    cachedInputTokens: usage?.cache_read_input_tokens,
+  }
+}
+
+function getClaudeCodeEffort(
+  provider: string,
+  providerOptions: Record<string, any> | undefined,
+): ClaudeCodeEffort | undefined {
+  const scoped = providerOptions?.[provider]
+  if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
+    return undefined
+  }
+
+  const raw = scoped.effort ?? scoped.reasoningEffort ?? scoped.thinkingLevel
+
+  if (typeof raw !== "string") {
+    return undefined
+  }
+
+  const normalized = raw.toLowerCase()
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "max"
+  ) {
+    return normalized
+  }
+
+  if (normalized === "xhigh") {
+    return "max"
+  }
+
+  log.warn("ignoring unsupported claude effort", { provider, effort: raw })
+  return undefined
+}
+
 export class ClaudeCodeLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = "v2"
   readonly modelId: string
@@ -136,7 +196,8 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
     const warnings: LanguageModelV2CallWarning[] = []
     const cwd = this.config.cwd ?? process.cwd()
     const scope = this.requestScope(options as any)
-    const sk = sessionKey(cwd, `${this.modelId}::${scope}`)
+    const effort = getClaudeCodeEffort(this.provider, options.providerOptions as any)
+    const sk = sessionKey(cwd, `${this.modelId}::${scope}`, effort)
 
     if (scope === "no-tools") {
       const text = this.synthesizeTitle(options.prompt)
@@ -185,11 +246,13 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       skipPermissions: this.config.skipPermissions !== false,
       includeSessionId: false,
       model: this.modelId,
+      effort,
     })
 
     log.info("doGenerate starting", {
       cwd,
       model: this.modelId,
+      effort,
       textLength: userMsg.length,
       includeHistoryContext,
     })
@@ -438,14 +501,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       } as any)
     }
 
-    const usage: LanguageModelV2Usage = {
-      inputTokens: result.usage?.input_tokens,
-      outputTokens: result.usage?.output_tokens,
-      totalTokens:
-        result.usage?.input_tokens && result.usage?.output_tokens
-          ? result.usage.input_tokens + result.usage.output_tokens
-          : undefined,
-    }
+    const usage = buildUsage(result.usage)
 
     return {
       content,
@@ -478,7 +534,8 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
     const cliPath = this.config.cliPath
     const skipPermissions = this.config.skipPermissions !== false
     const scope = this.requestScope(options as any)
-    const sk = sessionKey(cwd, `${this.modelId}::${scope}`)
+    const effort = getClaudeCodeEffort(this.provider, options.providerOptions as any)
+    const sk = sessionKey(cwd, `${this.modelId}::${scope}`, effort)
 
     if (scope === "no-tools") {
       const text = this.synthesizeTitle(options.prompt)
@@ -538,6 +595,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
     log.info("doStream starting", {
       cwd,
       model: this.modelId,
+      effort,
       textLength: userMsg.length,
       includeHistoryContext,
       hasActiveProcess,
@@ -547,6 +605,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       sessionKey: sk,
       skipPermissions,
       model: this.modelId,
+      effort,
     })
 
     const stream = new ReadableStream<LanguageModelV2StreamPart>({
@@ -1056,16 +1115,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                 type: "finish",
                 finishReason:
                   realToolCallCount > 0 ? "tool-calls" : "stop",
-                usage: {
-                  inputTokens: msg.usage?.input_tokens,
-                  outputTokens: msg.usage?.output_tokens,
-                  totalTokens:
-                    msg.usage?.input_tokens &&
-                    msg.usage?.output_tokens
-                      ? msg.usage.input_tokens +
-                        msg.usage.output_tokens
-                      : undefined,
-                },
+                usage: buildUsage(msg.usage),
                 providerMetadata: {
                   "claude-code": resultMeta,
                 },
@@ -1099,11 +1149,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
           controller.enqueue({
             type: "finish",
             finishReason: "stop",
-            usage: {
-              inputTokens: undefined,
-              outputTokens: undefined,
-              totalTokens: undefined,
-            },
+            usage: buildUsage(resultMeta.usage),
             providerMetadata: {
               "claude-code": resultMeta,
             },
