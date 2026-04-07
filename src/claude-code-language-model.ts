@@ -534,6 +534,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
       })
     }
 
+    let nonExecutedToolCalls = 0
     for (const tc of result.toolCalls) {
       const {
         name: mappedName,
@@ -549,6 +550,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
         input: JSON.stringify(mappedInput),
         providerExecuted: executed,
       } as any)
+      if (!executed) nonExecutedToolCalls++
     }
 
     const usage = buildUsage(result.usage)
@@ -556,7 +558,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
     return {
       content,
       finishReason: buildFinishReason(
-        result.toolCalls.length > 0 ? "tool-calls" : "stop",
+        nonExecutedToolCalls > 0 ? "tool-calls" : "stop",
       ),
       usage,
       request: { body: { text: userMsg } },
@@ -950,7 +952,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                       input: JSON.stringify(mappedInput),
                       providerExecuted: executed,
                     } as any)
-                    realToolCallCount++
+                    if (!executed) realToolCallCount++
                   }
                   log.info("tool call complete", {
                     name: tc.name,
@@ -1076,7 +1078,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                         input: JSON.stringify(mappedInput),
                         providerExecuted: executed,
                       } as any)
-                      realToolCallCount++
+                      if (!executed) realToolCallCount++
                     }
                     log.info("tool_use from assistant message", {
                       name: block.name,
