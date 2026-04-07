@@ -65,6 +65,28 @@ function buildZeroUsage(): any {
   }
 }
 
+function buildProviderMetadata(meta: {
+  sessionId?: string
+  costUsd?: number
+  durationMs?: number
+  usage?: ClaudeStreamMessage["usage"]
+}): Record<string, Record<string, string | number | null>> | undefined {
+  const data: Record<string, string | number | null> = {}
+  const anthropic: Record<string, string | number | null> = {}
+
+  if (typeof meta.sessionId === "string") data.sessionId = meta.sessionId
+  if (typeof meta.costUsd === "number") data.costUsd = meta.costUsd
+  if (typeof meta.durationMs === "number") data.durationMs = meta.durationMs
+  if (typeof meta.usage?.cache_creation_input_tokens === "number") {
+    anthropic.cacheCreationInputTokens = meta.usage.cache_creation_input_tokens
+  }
+
+  return {
+    ...(Object.keys(data).length > 0 ? { "claude-code": data } : {}),
+    ...(Object.keys(anthropic).length > 0 ? { anthropic } : {}),
+  }
+}
+
 function getClaudeCodeEffort(
   provider: string,
   providerOptions: Record<string, any> | undefined,
@@ -543,13 +565,12 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
         timestamp: new Date(),
         modelId: this.modelId,
       },
-      providerMetadata: {
-        "claude-code": {
-          sessionId: result.sessionId ?? null,
-          costUsd: result.costUsd ?? null,
-          durationMs: result.durationMs ?? null,
-        },
-      },
+      providerMetadata: buildProviderMetadata({
+        sessionId: result.sessionId,
+        costUsd: result.costUsd,
+        durationMs: result.durationMs,
+        usage: result.usage,
+      }),
       warnings,
     }
   }
@@ -1157,9 +1178,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
                   realToolCallCount > 0 ? "tool-calls" : "stop",
                 ),
                 usage: buildUsage(msg.usage),
-                providerMetadata: {
-                  "claude-code": resultMeta,
-                },
+                providerMetadata: buildProviderMetadata(resultMeta),
               } as any)
 
               controllerClosed = true
@@ -1191,9 +1210,7 @@ export class ClaudeCodeLanguageModel implements LanguageModelV2 {
             type: "finish",
             finishReason: buildFinishReason("stop"),
             usage: buildUsage(resultMeta.usage),
-            providerMetadata: {
-              "claude-code": resultMeta,
-            },
+            providerMetadata: buildProviderMetadata(resultMeta),
           } as any)
           try {
             controller.close()
