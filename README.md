@@ -42,13 +42,37 @@ Add this to your project's `opencode.json`:
           "name": "Claude Code Sonnet",
           "attachment": false,
           "limit": { "context": 1000000, "output": 16384 },
-          "capabilities": { "reasoning": true, "toolcall": true }
+          "capabilities": { "reasoning": true, "toolcall": true },
+          "variants": {
+            "low": { "effort": "low" },
+            "medium": { "effort": "medium" },
+            "high": { "effort": "high" },
+            "max": { "effort": "max" }
+          }
         },
         "opus": {
           "name": "Claude Code Opus",
           "attachment": false,
+          "limit": { "context": 200000, "output": 16384 },
+          "capabilities": { "reasoning": true, "toolcall": true },
+          "variants": {
+            "low": { "effort": "low" },
+            "medium": { "effort": "medium" },
+            "high": { "effort": "high" },
+            "max": { "effort": "max" }
+          }
+        },
+        "opus[1m]": {
+          "name": "Claude Code Opus (1M)",
+          "attachment": false,
           "limit": { "context": 1000000, "output": 16384 },
-          "capabilities": { "reasoning": true, "toolcall": true }
+          "capabilities": { "reasoning": true, "toolcall": true },
+          "variants": {
+            "low": { "effort": "low" },
+            "medium": { "effort": "medium" },
+            "high": { "effort": "high" },
+            "max": { "effort": "max" }
+          }
         }
       },
       "options": {
