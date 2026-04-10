@@ -30,7 +30,7 @@ Add this to your project's `opencode.json`:
 {
   "provider": {
     "claude-code": {
-      "npm": "opencode-claude-code-plugin",
+      "npm": "file:///absolute/path/to/this/repo/root",
       "models": {
         "haiku": {
           "name": "Claude Code Haiku",
@@ -41,7 +41,7 @@ Add this to your project's `opencode.json`:
         "sonnet": {
           "name": "Claude Code Sonnet",
           "attachment": false,
-          "limit": { "context": 1000000, "output": 16384 },
+          "limit": { "context": 200000, "output": 16384 },
           "capabilities": { "reasoning": true, "toolcall": true },
           "variants": {
             "low": { "effort": "low" },
@@ -83,7 +83,7 @@ Add this to your project's `opencode.json`:
 }
 ```
 
-Replace `"opencode-claude-code-plugin"` with a `file://` path if you're using a local build.
+Because this isn't the published NPM package, you'll need to pull this repo and build it locally then reference via file.
 
 The model IDs (`haiku`, `sonnet`, `opus`) are passed directly to `claude --model`, which accepts these aliases natively.
 
